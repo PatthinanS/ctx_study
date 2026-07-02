@@ -4,6 +4,7 @@ from typing import Any, Optional
 
 import pandas as pd
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from transformers import PreTrainedTokenizerBase
 
@@ -32,6 +33,33 @@ def load_iemocap(csv_path: str) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# Embedding helper (used by retrieval strategy)
+# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def _embed_dialogue(
+    rows: list[dict],
+    backbone: Any,
+    tokenizer: PreTrainedTokenizerBase,
+    device: torch.device,
+    max_length: int = 128,
+) -> torch.Tensor:
+    """Mean-pool last hidden state over non-padding tokens for each turn."""
+    texts = [f"{r['speaker']}: {r['text']}" for r in rows]
+    enc = tokenizer(
+        texts,
+        max_length=max_length,
+        truncation=True,
+        padding=True,
+        return_tensors="pt",
+    ).to(device)
+    outputs = backbone(input_ids=enc["input_ids"], attention_mask=enc["attention_mask"])
+    mask = enc["attention_mask"].unsqueeze(-1).float()
+    emb = (outputs.last_hidden_state * mask).sum(1) / mask.sum(1).clamp(min=1e-9)
+    return emb.cpu()
+
+
+# ---------------------------------------------------------------------------
 # Context strategies
 # ---------------------------------------------------------------------------
 
@@ -57,10 +85,38 @@ def _strategy_window(
     return ctx_str, cur_str
 
 
+def _strategy_retrieval(
+    utterance: dict,
+    history: list[dict],
+    k: int,
+    embeddings: "torch.Tensor | None" = None,
+    turn_idx: int = 0,
+    sort_by: str = "chrono",
+    **kwargs: Any,
+) -> tuple[Optional[str], str]:
+    cur_str = f"{utterance['speaker']}: {utterance['text']}"
+    if not history or embeddings is None:
+        return None, cur_str
+    target_emb = embeddings[turn_idx].unsqueeze(0)   # (1, H)
+    history_embs = embeddings[:turn_idx]              # (n_prior, H)
+    sims = F.cosine_similarity(target_emb, history_embs, dim=-1)
+    topk = min(k, len(history))
+    topk_result = sims.topk(topk)
+    if sort_by == "asc":
+        # least similar first, most similar last (sits closest to target in input)
+        order = topk_result.values.argsort()
+        top_indices = topk_result.indices[order].tolist()
+    else:  # "chrono"
+        top_indices = topk_result.indices.sort().values.tolist()
+    ctx_str = " ".join(f"{t['speaker']}: {t['text']}" for t in [history[i] for i in top_indices])
+    return ctx_str, cur_str
+
+
 # Registry — add new strategies here; no other file needs to change.
 STRATEGY_REGISTRY: dict[str, Any] = {
     "none": _strategy_none,
     "window": _strategy_window,
+    "retrieval": _strategy_retrieval,
 }
 
 
@@ -96,6 +152,8 @@ class IEMOCAPDataset(Dataset):
         cfg: dict,
         sessions: list[int],
         max_samples: int | None = None,
+        backbone: Any = None,
+        device: "torch.device | None" = None,
     ) -> None:
         ctx_cfg = cfg["context"]
         strategy = ctx_cfg["strategy"]
@@ -111,12 +169,23 @@ class IEMOCAPDataset(Dataset):
         for (_, _dialog), grp in subset.groupby(["session", "dialog"], sort=False):
             grp = grp.sort_values("start_time").reset_index(drop=True)
             rows = grp.to_dict("records")
+
+            dial_embeddings = None
+            if strategy == "retrieval" and backbone is not None:
+                backbone.eval()
+                dial_embeddings = _embed_dialogue(
+                    rows, backbone, tokenizer,
+                    device or torch.device("cpu"), max_length,
+                )
+
             for idx, row in enumerate(rows):
                 ctx, cur = build_context(
                     utterance=row,
                     history=rows[:idx],
                     strategy=strategy,
                     k=k,
+                    embeddings=dial_embeddings,
+                    turn_idx=idx,
                     **strategy_kwargs,
                 )
                 label = [float(row["valence"]), float(row["arousal"]), float(row["dominance"])]
@@ -189,13 +258,15 @@ def build_dataloaders(
     df: pd.DataFrame,
     tokenizer: PreTrainedTokenizerBase,
     cfg: dict,
+    backbone: Any = None,
+    device: "torch.device | None" = None,
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
     train_sessions, val_sessions, test_sessions = get_splits(df, cfg)
 
     max_samples = cfg.get("_smoke_max_samples")
-    train_ds = IEMOCAPDataset(df, tokenizer, cfg, sessions=train_sessions, max_samples=max_samples)
-    val_ds = IEMOCAPDataset(df, tokenizer, cfg, sessions=val_sessions, max_samples=max_samples)
-    test_ds = IEMOCAPDataset(df, tokenizer, cfg, sessions=test_sessions, max_samples=max_samples)
+    train_ds = IEMOCAPDataset(df, tokenizer, cfg, sessions=train_sessions, max_samples=max_samples, backbone=backbone, device=device)
+    val_ds = IEMOCAPDataset(df, tokenizer, cfg, sessions=val_sessions, max_samples=max_samples, backbone=backbone, device=device)
+    test_ds = IEMOCAPDataset(df, tokenizer, cfg, sessions=test_sessions, max_samples=max_samples, backbone=backbone, device=device)
 
     num_workers = cfg.get("num_workers", 4)
 

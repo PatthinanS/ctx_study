@@ -198,15 +198,17 @@ def train(cfg: dict, device: torch.device) -> dict[str, float]:
     df = load_iemocap(cfg["csv_path"])
     print(f"  {len(df)} utterances, {df['session'].nunique()} sessions")
 
-    train_loader, val_loader, test_loader = build_dataloaders(df, tokenizer, cfg)
+    model = VADModel(cfg).to(device)
+    loss_fn = get_loss_fn(cfg).to(device)
+
+    train_loader, val_loader, test_loader = build_dataloaders(
+        df, tokenizer, cfg, backbone=model.backbone, device=device
+    )
     print(
         f"  train={len(train_loader.dataset)}  "
         f"val={len(val_loader.dataset)}  "
         f"test={len(test_loader.dataset)}"
     )
-
-    model = VADModel(cfg).to(device)
-    loss_fn = get_loss_fn(cfg).to(device)
 
     output_dir = cfg.get("output_dir", "outputs")
     os.makedirs(output_dir, exist_ok=True)

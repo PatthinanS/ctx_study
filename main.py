@@ -51,6 +51,49 @@ def _apply_smoke(cfg: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# C1 vs C2 sanity check
+# ---------------------------------------------------------------------------
+
+def _sanity_check(cfg: dict, device: torch.device) -> None:
+    from transformers import AutoModel, AutoTokenizer
+
+    from src.data import _embed_dialogue, build_context, load_iemocap
+
+    print(f"[sanity] Loading tokenizer and backbone: {cfg['backbone']}")
+    tokenizer = AutoTokenizer.from_pretrained(cfg["backbone"])
+    df = load_iemocap(cfg["csv_path"])
+    backbone = AutoModel.from_pretrained(cfg["backbone"]).to(device).eval()
+
+    n_shown = 0
+    for (_session, _dialog), grp in df.groupby(["session", "dialog"], sort=False):
+        if n_shown >= 3:
+            break
+        rows = grp.sort_values("start_time").to_dict("records")
+        if len(rows) < 4:
+            continue
+
+        embeddings = _embed_dialogue(rows, backbone, tokenizer, device, cfg.get("max_length", 128))
+
+        print(f"\n--- Dialogue: {_dialog} (session {_session}) ---")
+        for idx in range(3, min(6, len(rows))):
+            row, history = rows[idx], rows[:idx]
+            ctx_cfg = cfg["context"]
+            ctx_c1, _ = build_context(row, history, strategy="window", k=ctx_cfg["k"])
+            ctx_c2, _ = build_context(
+                row, history, strategy="retrieval", k=ctx_cfg["k"],
+                embeddings=embeddings, turn_idx=idx,
+                **ctx_cfg.get("strategy_kwargs", {}),
+            )
+            print(f"  utt[{idx}] target : {row['speaker']}: {row['text']}")
+            print(f"           C1 ctx  : {ctx_c1}")
+            print(f"           C2 ctx  : {ctx_c2}")
+            print()
+        n_shown += 1
+
+    print("[sanity] Done.")
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -61,6 +104,11 @@ def parse_args() -> argparse.Namespace:
         "--smoke",
         action="store_true",
         help="Limit to 1 epoch per phase and 0 workers — fast CPU sanity check",
+    )
+    parser.add_argument(
+        "--sanity",
+        action="store_true",
+        help="Print C1 vs C2 context comparison on 3 sample dialogues, then exit",
     )
     parser.add_argument(
         "--device",
@@ -98,6 +146,10 @@ def main() -> None:
     device = resolve_device(args.device)
     print(f"Device: {device}")
     print(f"Experiment: {cfg.get('experiment_name', args.config)}")
+
+    if args.sanity:
+        _sanity_check(cfg, device)
+        return
 
     metrics = train(cfg, device)
 
