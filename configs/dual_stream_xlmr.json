@@ -1,11 +1,11 @@
 {
-  "experiment_name": "retrieval_k1_roberta",
-  "backbone": "roberta-base",
+  "experiment_name": "dual_stream_xlmr",
+  "backbone": "xlm-roberta-base",
   "max_length": 128,
   "dropout": 0.1,
   "context": {
-    "strategy": "retrieval",
-    "k": 1,
+    "strategy": "dual_stream",
+    "k": 0,
     "strategy_kwargs": {}
   },
   "loss": {
@@ -15,11 +15,7 @@
     "mode": "leave_one_session_out",
     "test_session": 5,
     "val_session": 4,
-    "train_sessions": [
-      1,
-      2,
-      3
-    ]
+    "train_sessions": [1, 2, 3]
   },
   "phase1": {
     "epochs": 5,
@@ -39,5 +35,5 @@
   "seed": 42,
   "num_workers": 4,
   "csv_path": "data/iemocap/iemocap_merged_all.csv",
-  "output_dir": "outputs/retrieval_k1_roberta"
+  "output_dir": "outputs/dual_stream_xlmr"
 }

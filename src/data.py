@@ -230,6 +230,82 @@ class IEMOCAPDataset(Dataset):
 
 
 # ---------------------------------------------------------------------------
+# C3: Speaker-stratified dual-stream dataset
+# ---------------------------------------------------------------------------
+
+class IEMOCAPDualStreamDataset(Dataset):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        tokenizer: PreTrainedTokenizerBase,
+        cfg: dict,
+        sessions: list[int],
+        max_samples: int | None = None,
+    ) -> None:
+        max_length = cfg["max_length"]
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.samples: list[tuple[Optional[str], Optional[str], str, list[float]]] = []
+
+        subset = df[df["session"].isin(sessions)].copy()
+        for (_, _dialog), grp in subset.groupby(["session", "dialog"], sort=False):
+            grp = grp.sort_values("start_time").reset_index(drop=True)
+            rows = grp.to_dict("records")
+
+            for idx, row in enumerate(rows):
+                history = rows[:idx]
+                spk = row["speaker"]
+
+                same_turns = [t for t in history if t["speaker"] == spk]
+                cross_turns = [t for t in history if t["speaker"] != spk]
+
+                same_text  = " ".join(f"{t['speaker']}: {t['text']}" for t in same_turns) or None
+                cross_text = " ".join(f"{t['speaker']}: {t['text']}" for t in cross_turns) or None
+                cur_text   = f"{spk}: {row['text']}"
+
+                label = [float(row["valence"]), float(row["arousal"]), float(row["dominance"])]
+                self.samples.append((same_text, cross_text, cur_text, label))
+
+                if max_samples is not None and len(self.samples) >= max_samples:
+                    break
+            if max_samples is not None and len(self.samples) >= max_samples:
+                break
+
+    def _tokenize(self, text: Optional[str]) -> dict[str, torch.Tensor]:
+        src = text if text is not None else " "
+        enc = self.tokenizer(
+            src,
+            max_length=self.max_length,
+            truncation=True,
+            padding="max_length",
+            return_tensors="pt",
+        )
+        return {k: v.squeeze(0) for k, v in enc.items()}
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        same_text, cross_text, cur_text, label = self.samples[idx]
+
+        target_enc = self._tokenize(cur_text)
+        same_enc   = self._tokenize(same_text)
+        cross_enc  = self._tokenize(cross_text)
+
+        return {
+            "input_ids":            target_enc["input_ids"],
+            "attention_mask":       target_enc["attention_mask"],
+            "same_input_ids":       same_enc["input_ids"],
+            "same_attention_mask":  same_enc["attention_mask"],
+            "same_valid":           torch.tensor(same_text is not None, dtype=torch.bool),
+            "cross_input_ids":      cross_enc["input_ids"],
+            "cross_attention_mask": cross_enc["attention_mask"],
+            "cross_valid":          torch.tensor(cross_text is not None, dtype=torch.bool),
+            "labels":               torch.tensor(label, dtype=torch.float32),
+        }
+
+
+# ---------------------------------------------------------------------------
 # Split helpers
 # ---------------------------------------------------------------------------
 
@@ -264,9 +340,14 @@ def build_dataloaders(
     train_sessions, val_sessions, test_sessions = get_splits(df, cfg)
 
     max_samples = cfg.get("_smoke_max_samples")
-    train_ds = IEMOCAPDataset(df, tokenizer, cfg, sessions=train_sessions, max_samples=max_samples, backbone=backbone, device=device)
-    val_ds = IEMOCAPDataset(df, tokenizer, cfg, sessions=val_sessions, max_samples=max_samples, backbone=backbone, device=device)
-    test_ds = IEMOCAPDataset(df, tokenizer, cfg, sessions=test_sessions, max_samples=max_samples, backbone=backbone, device=device)
+    if cfg["context"]["strategy"] == "dual_stream":
+        train_ds = IEMOCAPDualStreamDataset(df, tokenizer, cfg, sessions=train_sessions, max_samples=max_samples)
+        val_ds   = IEMOCAPDualStreamDataset(df, tokenizer, cfg, sessions=val_sessions,   max_samples=max_samples)
+        test_ds  = IEMOCAPDualStreamDataset(df, tokenizer, cfg, sessions=test_sessions,  max_samples=max_samples)
+    else:
+        train_ds = IEMOCAPDataset(df, tokenizer, cfg, sessions=train_sessions, max_samples=max_samples, backbone=backbone, device=device)
+        val_ds   = IEMOCAPDataset(df, tokenizer, cfg, sessions=val_sessions,   max_samples=max_samples, backbone=backbone, device=device)
+        test_ds  = IEMOCAPDataset(df, tokenizer, cfg, sessions=test_sessions,  max_samples=max_samples, backbone=backbone, device=device)
 
     num_workers = cfg.get("num_workers", 4)
 

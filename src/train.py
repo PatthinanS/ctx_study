@@ -14,7 +14,7 @@ from transformers import AutoTokenizer, get_linear_schedule_with_warmup
 
 from src.data import build_dataloaders, load_iemocap
 from src.metrics import compute_metrics, format_metrics
-from src.model import VADModel, get_loss_fn
+from src.model import get_loss_fn, get_model
 
 
 # ---------------------------------------------------------------------------
@@ -69,11 +69,16 @@ def build_scheduler(
 # ---------------------------------------------------------------------------
 
 def _get_batch_kwargs(batch: dict, device: torch.device) -> dict:
-    return {
+    kwargs: dict = {
         "input_ids": batch["input_ids"].to(device),
         "attention_mask": batch["attention_mask"].to(device),
         "token_type_ids": batch["token_type_ids"].to(device) if "token_type_ids" in batch else None,
     }
+    if "same_input_ids" in batch:
+        for k in ("same_input_ids", "same_attention_mask", "same_valid",
+                  "cross_input_ids", "cross_attention_mask", "cross_valid"):
+            kwargs[k] = batch[k].to(device)
+    return kwargs
 
 
 def train_epoch(
@@ -198,11 +203,14 @@ def train(cfg: dict, device: torch.device) -> dict[str, float]:
     df = load_iemocap(cfg["csv_path"])
     print(f"  {len(df)} utterances, {df['session'].nunique()} sessions")
 
-    model = VADModel(cfg).to(device)
+    model = get_model(cfg).to(device)
     loss_fn = get_loss_fn(cfg).to(device)
 
+    is_dual = cfg["context"]["strategy"] == "dual_stream"
     train_loader, val_loader, test_loader = build_dataloaders(
-        df, tokenizer, cfg, backbone=model.backbone, device=device
+        df, tokenizer, cfg,
+        backbone=None if is_dual else model.backbone,
+        device=device,
     )
     print(
         f"  train={len(train_loader.dataset)}  "
