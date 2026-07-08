@@ -7,8 +7,15 @@ Investigates how conversational context selection strategy affects VAD (Valenceâ
 ## Setup
 
 ```bash
-conda activate BERTdemo
-pip install torch transformers pandas scipy tqdm
+bash setup.sh
+```
+
+For GPU support, install the matching torch variant afterwards:
+```bash
+# CUDA 11.8
+.venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cu118
+# CUDA 12.1
+.venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cu121
 ```
 
 Place the IEMOCAP CSV at:
@@ -24,7 +31,7 @@ Required columns: `session, dialog, utterance_id, speaker, start_time, text, val
 
 ### Single experiment
 ```bash
-python main.py --config configs/roberta/base/base_roberta.json --device mps
+python main.py --config configs/roberta/base/base_roberta.json
 ```
 
 ### All experiments (sequential)
