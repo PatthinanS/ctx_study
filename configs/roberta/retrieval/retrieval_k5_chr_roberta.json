@@ -1,0 +1,45 @@
+{
+  "max_length": 128,
+  "dropout": 0.1,
+  "loss": {
+    "name": "mse"
+  },
+  "splits": {
+    "mode": "leave_one_session_out",
+    "test_session": 5,
+    "val_session": 4,
+    "train_sessions": [
+      1,
+      2,
+      3
+    ]
+  },
+  "phase1": {
+    "epochs": 5,
+    "lr": 0.003,
+    "freeze_encoder": true,
+    "warmup_ratio": 0.1
+  },
+  "phase2": {
+    "epochs": 15,
+    "lr": 5e-06,
+    "freeze_encoder": false,
+    "warmup_ratio": 0.1,
+    "head_lr_multiplier": 10
+  },
+  "batch_size": 16,
+  "gradient_clip": 1.0,
+  "seed": 42,
+  "num_workers": 4,
+  "csv_path": "data/iemocap/iemocap_merged_all.csv",
+  "experiment_name": "retrieval_k5_chr_roberta",
+  "backbone": "roberta-base",
+  "context": {
+    "strategy": "retrieval",
+    "k": 5,
+    "strategy_kwargs": {
+      "sort_by": "chrono"
+    }
+  },
+  "output_dir": "outputs/retrieval_k5_chr_roberta"
+}
