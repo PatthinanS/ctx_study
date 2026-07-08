@@ -1,11 +1,11 @@
 #!/bin/bash
-PYTHON=/opt/homebrew/Caskroom/miniconda/base/envs/BERTdemo/bin/python
+PYTHON=.venv/bin/python
 DIR=/Users/DriveD/Documents/JAIST/ContextStudy_NewResearch
 FILTER="Loading weights\|\[transformers\]\|Key \|----\|lm_head\|pooler\|Notes\|UNEXPECTED\|MISSING\|newly init"
 
 cd $DIR
 
-run() { $PYTHON main.py --config "$1" --device mps 2>&1 | grep -v "$FILTER"; }
+run() { $PYTHON main.py --config "$1" 2>&1 | grep -v "$FILTER"; }
 
 # C0 — no context
 echo "=== base_roberta ===";        run configs/roberta/base/base_roberta.json
