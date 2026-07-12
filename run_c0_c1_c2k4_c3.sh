@@ -8,12 +8,19 @@ cd "$DIR"
 
 PYTHON=.venv/bin/python
 LOG="run_log_c0_c1_c2k4_c3_$(date +%Y%m%d_%H%M%S).txt"
+declare -a RESULTS=()
 
 run() {
   local name="$1" cfg="$2"
   shift 2
   echo "=== $name ===" | tee -a "$LOG"
-  $PYTHON main.py --config "$cfg" "$@" 2>&1 | tee -a "$LOG"
+  if $PYTHON main.py --config "$cfg" "$@" 2>&1 | tee -a "$LOG"; then
+    echo "=== $name: OK ===" | tee -a "$LOG"
+    RESULTS+=("$name: OK")
+  else
+    echo "=== $name: FAILED ===" | tee -a "$LOG"
+    RESULTS+=("$name: FAILED")
+  fi
 }
 
 # C0 — no context
@@ -28,4 +35,6 @@ run retrieval_k4_chr_roberta configs/roberta/retrieval/retrieval_k4_chr_roberta.
 # C3 — dual stream, stream_k overridden to 4 to match C2's context size
 run dual_stream_roberta configs/roberta/dual_stream/dual_stream_roberta.json --override context.stream_k=4
 
+echo "=== SUMMARY ===" | tee -a "$LOG"
+printf '%s\n' "${RESULTS[@]}" | tee -a "$LOG"
 echo "=== ALL DONE ===" | tee -a "$LOG"
