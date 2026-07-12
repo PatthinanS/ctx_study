@@ -6,6 +6,7 @@
   "context": {
     "strategy": "dual_stream",
     "k": 0,
+    "stream_k": 2,
     "strategy_kwargs": {}
   },
   "loss": {
