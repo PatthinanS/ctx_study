@@ -69,7 +69,7 @@ Two-phase training per experiment:
 - Context strategies registered in `STRATEGY_REGISTRY`:
   - `"none"` → returns `(None, cur_str)`
   - `"window"` → last k turns as `ctx_str`
-  - `"retrieval"` → top-k by cosine sim on backbone embeddings; `sort_by="chrono"` or `"asc"`
+  - `"retrieval"` → top-k by cosine sim on backbone embeddings; `sort_by="chrono"` or `"sim_asc"` (`"asc"` deprecated alias)
 - For retrieval: dialogue embeddings computed once per dialogue via mean-pool of last hidden state
 - Tokenization: `tokenizer(ctx, cur)` for context conditions; `tokenizer(cur)` for C0
 

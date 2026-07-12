@@ -93,7 +93,7 @@ configs/
   "context": {
     "strategy": "none | window | retrieval | dual_stream",
     "k": 3,
-    "strategy_kwargs": { "sort_by": "chrono | asc" }
+    "strategy_kwargs": { "sort_by": "chrono | sim_asc" }
   },
   "phase1": { "epochs": 5,  "lr": 3e-3, "freeze_encoder": true  },
   "phase2": { "epochs": 15, "lr": 5e-6, "freeze_encoder": false, "head_lr_multiplier": 10 },
@@ -103,7 +103,7 @@ configs/
 
 **Retrieval sort orders:**
 - `chrono` — top-k turns sorted by original dialogue order
-- `asc` — top-k turns sorted by ascending similarity (least similar first, closest to target last)
+- `sim_asc` — top-k turns sorted by ascending similarity (least similar first, closest to target last) (`asc` still accepted as a deprecated alias)
 
 ---
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import Any, Optional
 
 import pandas as pd
@@ -85,6 +86,9 @@ def _strategy_window(
     return ctx_str, cur_str
 
 
+_asc_deprecation_warned = False
+
+
 def _strategy_retrieval(
     utterance: dict,
     history: list[dict],
@@ -97,16 +101,27 @@ def _strategy_retrieval(
     cur_str = f"{utterance['speaker']}: {utterance['text']}"
     if not history or embeddings is None:
         return None, cur_str
+    if sort_by == "asc":
+        global _asc_deprecation_warned
+        if not _asc_deprecation_warned:
+            msg = "sort_by='asc' is deprecated; use 'sim_asc' instead."
+            # DeprecationWarning is ignored by default outside __main__ (PEP 565),
+            # so also print — otherwise this would silently never surface when
+            # run via main.py/run_experiments.sh.
+            warnings.warn(msg, DeprecationWarning, stacklevel=2)
+            print(f"  [deprecation] {msg}")
+            _asc_deprecation_warned = True
+        sort_by = "sim_asc"
     target_emb = embeddings[turn_idx].unsqueeze(0)   # (1, H)
     history_embs = embeddings[:turn_idx]              # (n_prior, H)
     sims = F.cosine_similarity(target_emb, history_embs, dim=-1)
     topk = min(k, len(history))
     topk_result = sims.topk(topk)
-    if sort_by == "asc":
-        # least similar first, most similar last (sits closest to target in input)
+    if sort_by == "sim_asc":
+        # ascending similarity: least similar first, most similar last (sits closest to target in input)
         order = topk_result.values.argsort()
         top_indices = topk_result.indices[order].tolist()
-    else:  # "chrono"
+    else:  # "chrono": original dialogue order
         top_indices = topk_result.indices.sort().values.tolist()
     ctx_str = " ".join(f"{t['speaker']}: {t['text']}" for t in [history[i] for i in top_indices])
     return ctx_str, cur_str

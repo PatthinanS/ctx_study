@@ -7,7 +7,7 @@
     "strategy": "retrieval",
     "k": 3,
     "strategy_kwargs": {
-      "sort_by": "asc"
+      "sort_by": "sim_asc"
     }
   },
   "loss": {

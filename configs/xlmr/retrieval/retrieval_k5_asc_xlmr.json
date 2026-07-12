@@ -38,7 +38,7 @@
     "strategy": "retrieval",
     "k": 5,
     "strategy_kwargs": {
-      "sort_by": "asc"
+      "sort_by": "sim_asc"
     }
   },
   "output_dir": "outputs/retrieval_k5_asc_xlmr"
