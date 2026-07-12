@@ -5,7 +5,7 @@
   "dropout": 0.1,
   "context": {
     "strategy": "window",
-    "k": 3,
+    "k": 4,
     "strategy_kwargs": {}
   },
   "loss": {
