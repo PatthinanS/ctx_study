@@ -30,6 +30,9 @@ outputs/**/*.bin
 run_log*.txt
 *.log
 
+# Pre-bugfix experiment archive (local reference only, not tracked)
+outputs/archive_pre_bugfix/
+
 # Data (potentially large / sensitive)
 data/
 
