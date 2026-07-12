@@ -178,6 +178,11 @@ class IEMOCAPDataset(Dataset):
 
         self.tokenizer = tokenizer
         self.max_length = max_length
+        # Dedicated left-truncating tokenizer so pair encoding can drop ctx's
+        # oldest tokens first without mutating the shared self.tokenizer
+        # (which stays right-truncating, used for cur and the ctx-is-None path).
+        self._left_tokenizer = AutoTokenizer.from_pretrained(cfg["backbone"], truncation_side="left")
+        self._pair_overhead = self.tokenizer.num_special_tokens_to_add(pair=True)
         self.samples: list[tuple[Optional[str], str, list[float]]] = []
 
         subset = df[df["session"].isin(sessions)].copy()
@@ -212,9 +217,23 @@ class IEMOCAPDataset(Dataset):
 
         self._print_truncation_stats(sessions)
 
+    def _cur_exceeds_budget(self, cur: str) -> bool:
+        # Exact boundary (not an approximation): HF's only_first truncation
+        # requires ctx to retain >=1 token after truncation, which reduces to
+        # cur_len + overhead < max_length for success. only_first does NOT
+        # raise when this fails — it just logs an error and returns the
+        # untruncated ids — so this proactive check is the real safety
+        # mechanism; a try/except around the only_first call would catch
+        # nothing.
+        cur_len = len(self.tokenizer(cur, add_special_tokens=False)["input_ids"])
+        return cur_len + self._pair_overhead >= self.max_length
+
     def _print_truncation_stats(self, sessions: list[int]) -> None:
         none_ctx_curs = [cur for ctx, cur, _ in self.samples if ctx is None]
-        pair_ctx_curs = [(ctx, cur) for ctx, cur, _ in self.samples if ctx is not None]
+        pair_samples = [(ctx, cur) for ctx, cur, _ in self.samples if ctx is not None]
+        exceeds = [self._cur_exceeds_budget(cur) for _, cur in pair_samples]
+        normal_pairs = [p for p, e in zip(pair_samples, exceeds) if not e]
+        fallback_pairs = [p for p, e in zip(pair_samples, exceeds) if e]
 
         attn_sums: list[int] = []
         if none_ctx_curs:
@@ -223,15 +242,23 @@ class IEMOCAPDataset(Dataset):
                 padding=True, return_tensors="pt",
             )
             attn_sums.extend(enc["attention_mask"].sum(dim=1).tolist())
-        if pair_ctx_curs:
-            ctxs, curs = zip(*pair_ctx_curs)
+        if normal_pairs:
+            ctxs, curs = zip(*normal_pairs)
+            enc = self._left_tokenizer(
+                list(ctxs), list(curs), max_length=self.max_length, truncation="only_first",
+                padding=True, return_tensors="pt",
+            )
+            attn_sums.extend(enc["attention_mask"].sum(dim=1).tolist())
+        if fallback_pairs:
+            _, curs = zip(*fallback_pairs)
             enc = self.tokenizer(
-                list(ctxs), list(curs), max_length=self.max_length, truncation=True,
+                list(curs), max_length=self.max_length, truncation=True,
                 padding=True, return_tensors="pt",
             )
             attn_sums.extend(enc["attention_mask"].sum(dim=1).tolist())
 
         _print_truncation_stats(f"IEMOCAPDataset sessions={sessions}", attn_sums, self.max_length)
+        print(f"  [truncation] IEMOCAPDataset sessions={sessions}: cur_exceeds_budget_fallback_count={len(fallback_pairs)}")
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -240,14 +267,23 @@ class IEMOCAPDataset(Dataset):
         ctx, cur, label = self.samples[idx]
 
         if ctx is not None:
-            enc = self.tokenizer(
-                ctx,
-                cur,
-                max_length=self.max_length,
-                truncation=True,
-                padding="max_length",
-                return_tensors="pt",
-            )
+            if self._cur_exceeds_budget(cur):
+                enc = self.tokenizer(
+                    cur,
+                    max_length=self.max_length,
+                    truncation=True,
+                    padding="max_length",
+                    return_tensors="pt",
+                )
+            else:
+                enc = self._left_tokenizer(
+                    ctx,
+                    cur,
+                    max_length=self.max_length,
+                    truncation="only_first",
+                    padding="max_length",
+                    return_tensors="pt",
+                )
         else:
             enc = self.tokenizer(
                 cur,
