@@ -22,7 +22,8 @@ class VADHead(nn.Module):
 class VADModel(nn.Module):
     def __init__(self, cfg: dict) -> None:
         super().__init__()
-        self.backbone = AutoModel.from_pretrained(cfg["backbone"])
+        self.backbone = AutoModel.from_pretrained(cfg["backbone"], add_pooling_layer=False)
+        assert self.backbone.pooler is None, "pooler must be disabled"
         self.head = VADHead(self.backbone.config.hidden_size, cfg.get("dropout", 0.1))
         # RoBERTa and XLM-R have type_vocab_size == 1 (no segment embeddings).
         self._use_token_type_ids = self.backbone.config.type_vocab_size > 1
@@ -38,12 +39,7 @@ class VADModel(nn.Module):
             kwargs["token_type_ids"] = token_type_ids
 
         outputs = self.backbone(**kwargs)
-        # pooler_output matches the notebook's two-arg BERT call that returns pooled.
-        # Falls back to CLS token if backbone has no pooler (e.g., some XLM-R configs).
-        if outputs.pooler_output is not None:
-            cls_repr = outputs.pooler_output
-        else:
-            cls_repr = outputs.last_hidden_state[:, 0, :]
+        cls_repr = outputs.last_hidden_state[:, 0, :]
 
         return self.head(cls_repr)
 
@@ -137,15 +133,14 @@ def get_loss_fn(cfg: dict) -> nn.Module:
 class VADModelDualStream(nn.Module):
     def __init__(self, cfg: dict) -> None:
         super().__init__()
-        self.backbone = AutoModel.from_pretrained(cfg["backbone"])
+        self.backbone = AutoModel.from_pretrained(cfg["backbone"], add_pooling_layer=False)
+        assert self.backbone.pooler is None, "pooler must be disabled"
         H = self.backbone.config.hidden_size
         self.fusion = nn.Linear(3 * H, H)
         self.head = VADHead(H, cfg.get("dropout", 0.1))
 
     def _encode(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         out = self.backbone(input_ids=input_ids, attention_mask=attention_mask)
-        if out.pooler_output is not None:
-            return out.pooler_output
         return out.last_hidden_state[:, 0, :]
 
     def forward(

@@ -39,16 +39,23 @@ def build_optimizer(
     freeze_encoder: bool,
 ) -> AdamW:
     if freeze_encoder:
-        params = [p for p in model.parameters() if p.requires_grad]
-        return AdamW(params, lr=phase_cfg["lr"])
+        optimizer = AdamW([p for p in model.parameters() if p.requires_grad], lr=phase_cfg["lr"])
+    else:
+        # Differential LR: smaller rate for backbone, larger for everything else.
+        multiplier = phase_cfg.get("head_lr_multiplier", 10)
+        backbone_ids = {id(p) for p in model.backbone.parameters()}
+        # Non-backbone modules (head, and fusion for dual-stream) are randomly
+        # initialized, so they all share the head's elevated LR.
+        rest = [p for p in model.parameters() if id(p) not in backbone_ids]
+        optimizer = AdamW([
+            {"params": list(model.backbone.parameters()), "lr": phase_cfg["lr"]},
+            {"params": rest, "lr": phase_cfg["lr"] * multiplier},
+        ])
 
-    # Differential LR: smaller rate for backbone, larger for head.
-    multiplier = phase_cfg.get("head_lr_multiplier", 10)
-    param_groups = [
-        {"params": list(model.backbone.parameters()), "lr": phase_cfg["lr"]},
-        {"params": list(model.head.parameters()), "lr": phase_cfg["lr"] * multiplier},
-    ]
-    return AdamW(param_groups)
+    registered = {id(p) for g in optimizer.param_groups for p in g["params"]}
+    trainable = {id(p) for p in model.parameters() if p.requires_grad}
+    assert trainable <= registered, "optimizer is missing trainable parameters"
+    return optimizer
 
 
 def build_scheduler(

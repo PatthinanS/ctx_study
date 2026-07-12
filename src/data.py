@@ -6,7 +6,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
-from transformers import PreTrainedTokenizerBase
+from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 _REQUIRED_COLS = {
     "session", "dialog", "utterance_id", "speaker",
@@ -141,6 +141,21 @@ def build_context(
 
 
 # ---------------------------------------------------------------------------
+# Truncation diagnostics (construction-time only, print-only)
+# ---------------------------------------------------------------------------
+
+def _print_truncation_stats(label: str, attn_sums: list[int], max_length: int) -> None:
+    n = len(attn_sums)
+    if n == 0:
+        print(f"  [truncation] {label}: no samples")
+        return
+    arr = torch.tensor(attn_sums, dtype=torch.float32)
+    trunc_rate = (arr == max_length).float().mean().item()
+    mean_tokens = arr.mean().item()
+    print(f"  [truncation] {label}: n={n} truncation_rate={trunc_rate:.3f} mean_non_pad_tokens={mean_tokens:.1f}")
+
+
+# ---------------------------------------------------------------------------
 # Dataset
 # ---------------------------------------------------------------------------
 
@@ -195,6 +210,29 @@ class IEMOCAPDataset(Dataset):
             if max_samples is not None and len(self.samples) >= max_samples:
                 break
 
+        self._print_truncation_stats(sessions)
+
+    def _print_truncation_stats(self, sessions: list[int]) -> None:
+        none_ctx_curs = [cur for ctx, cur, _ in self.samples if ctx is None]
+        pair_ctx_curs = [(ctx, cur) for ctx, cur, _ in self.samples if ctx is not None]
+
+        attn_sums: list[int] = []
+        if none_ctx_curs:
+            enc = self.tokenizer(
+                none_ctx_curs, max_length=self.max_length, truncation=True,
+                padding=True, return_tensors="pt",
+            )
+            attn_sums.extend(enc["attention_mask"].sum(dim=1).tolist())
+        if pair_ctx_curs:
+            ctxs, curs = zip(*pair_ctx_curs)
+            enc = self.tokenizer(
+                list(ctxs), list(curs), max_length=self.max_length, truncation=True,
+                padding=True, return_tensors="pt",
+            )
+            attn_sums.extend(enc["attention_mask"].sum(dim=1).tolist())
+
+        _print_truncation_stats(f"IEMOCAPDataset sessions={sessions}", attn_sums, self.max_length)
+
     def __len__(self) -> int:
         return len(self.samples)
 
@@ -243,8 +281,13 @@ class IEMOCAPDualStreamDataset(Dataset):
         max_samples: int | None = None,
     ) -> None:
         max_length = cfg["max_length"]
+        stream_k = cfg["context"].get("stream_k", 0)
         self.tokenizer = tokenizer
         self.max_length = max_length
+        # Same/cross streams are truncated from the left (oldest turns dropped
+        # first) so long dialogues keep the most recent, contextually relevant
+        # turns. Target-utterance tokenization is untouched (default right side).
+        self._left_tokenizer = AutoTokenizer.from_pretrained(cfg["backbone"], truncation_side="left")
         self.samples: list[tuple[Optional[str], Optional[str], str, list[float]]] = []
 
         subset = df[df["session"].isin(sessions)].copy()
@@ -258,6 +301,9 @@ class IEMOCAPDualStreamDataset(Dataset):
 
                 same_turns = [t for t in history if t["speaker"] == spk]
                 cross_turns = [t for t in history if t["speaker"] != spk]
+                if stream_k > 0:
+                    same_turns = same_turns[-stream_k:]
+                    cross_turns = cross_turns[-stream_k:]
 
                 same_text  = " ".join(f"{t['speaker']}: {t['text']}" for t in same_turns) or None
                 cross_text = " ".join(f"{t['speaker']}: {t['text']}" for t in cross_turns) or None
@@ -271,9 +317,35 @@ class IEMOCAPDualStreamDataset(Dataset):
             if max_samples is not None and len(self.samples) >= max_samples:
                 break
 
-    def _tokenize(self, text: Optional[str]) -> dict[str, torch.Tensor]:
+        self._print_truncation_stats(sessions)
+
+    def _print_truncation_stats(self, sessions: list[int]) -> None:
+        same_texts  = [s if s is not None else " " for s, _, _, _ in self.samples]
+        cross_texts = [c if c is not None else " " for _, c, _, _ in self.samples]
+
+        same_enc = self._left_tokenizer(
+            same_texts, max_length=self.max_length, truncation=True,
+            padding=True, return_tensors="pt",
+        )
+        cross_enc = self._left_tokenizer(
+            cross_texts, max_length=self.max_length, truncation=True,
+            padding=True, return_tensors="pt",
+        )
+        _print_truncation_stats(
+            f"IEMOCAPDualStreamDataset same sessions={sessions}",
+            same_enc["attention_mask"].sum(dim=1).tolist(), self.max_length,
+        )
+        _print_truncation_stats(
+            f"IEMOCAPDualStreamDataset cross sessions={sessions}",
+            cross_enc["attention_mask"].sum(dim=1).tolist(), self.max_length,
+        )
+
+    def _tokenize(
+        self, text: Optional[str], tokenizer: Optional[PreTrainedTokenizerBase] = None,
+    ) -> dict[str, torch.Tensor]:
+        tok = tokenizer or self.tokenizer
         src = text if text is not None else " "
-        enc = self.tokenizer(
+        enc = tok(
             src,
             max_length=self.max_length,
             truncation=True,
@@ -289,8 +361,8 @@ class IEMOCAPDualStreamDataset(Dataset):
         same_text, cross_text, cur_text, label = self.samples[idx]
 
         target_enc = self._tokenize(cur_text)
-        same_enc   = self._tokenize(same_text)
-        cross_enc  = self._tokenize(cross_text)
+        same_enc   = self._tokenize(same_text, self._left_tokenizer)
+        cross_enc  = self._tokenize(cross_text, self._left_tokenizer)
 
         return {
             "input_ids":            target_enc["input_ids"],
